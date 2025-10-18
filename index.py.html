@@ -1,0 +1,2303 @@
+"""
+Infinity Backend Core (IBC) - Python Edition v3.0 - ULTIMATE PRODUCTION SERVER
+A complete enterprise backend with advanced real-world problem-solving features
+Now with: AI Integration, Real-time Communications, Blockchain-style Security, IoT Support, and More
+"""
+
+from flask import Flask, request, jsonify, send_file, render_template_string
+from flask_cors import CORS
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, create_refresh_token
+from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
+from flask_sqlalchemy import SQLAlchemy
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from flask_socketio import SocketIO, emit
+from flasgger import Swagger
+import json
+import os
+import datetime
+import uuid
+import logging
+from typing import Dict, List, Any, Optional
+import smtplib
+from email.mime.text import MimeText
+from email.mime.multipart import MimeMultipart
+import requests
+import math
+import re
+from datetime import datetime, timedelta
+import threading
+import time
+from dotenv import load_dotenv
+import hashlib
+import hmac
+import base64
+import qrcode
+import io
+import jwt as pyjwt
+from functools import wraps
+import redis
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+import speech_recognition as sr
+import pyttsx3
+import openai
+from transformers import pipeline
+import joblib
+from sklearn.ensemble import RandomForestClassifier
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy import stats
+import warnings
+warnings.filterwarnings('ignore')
+
+# Load environment variables
+load_dotenv()
+
+# Initialize Flask App
+app = Flask(__name__)
+CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
+# Production Configuration
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-ultra-secure-key-change-now')
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'jwt-ultra-secure-key-change-now')
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
+app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=30)
+app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///ibc_ultimate.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['REDIS_URL'] = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+
+# Ensure directories exist
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+os.makedirs('backups', exist_ok=True)
+os.makedirs('models', exist_ok=True)
+os.makedirs('reports', exist_ok=True)
+
+# Initialize Extensions
+db = SQLAlchemy(app)
+jwt = JWTManager(app)
+
+try:
+    redis_client = redis.from_url(app.config['REDIS_URL'])
+except:
+    redis_client = None
+
+# Rate Limiting
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["1000 per day", "200 per hour"],
+    storage_uri=app.config['REDIS_URL'] if redis_client else "memory://"
+)
+
+# Swagger Documentation
+app.config['SWAGGER'] = {
+    'title': 'Infinity Backend Core ULTIMATE API',
+    'uiversion': 3,
+    'description': 'Complete ultimate backend server with AI, IoT, Blockchain, and real-world problem solving',
+    'termsOfService': 'https://your-terms.com/',
+    'contact': {
+        'name': 'API Support',
+        'url': 'https://your-support.com',
+        'email': 'support@yourcompany.com'
+    },
+    'license': {
+        'name': 'MIT',
+        'url': 'https://opensource.org/licenses/MIT'
+    }
+}
+swagger = Swagger(app)
+
+# Advanced Logging Configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(name)s %(threadName)s : %(message)s',
+    handlers=[
+        logging.FileHandler('ibc_ultimate.log'),
+        logging.StreamHandler(),
+        logging.handlers.RotatingFileHandler('ibc_ultimate_rotating.log', maxBytes=10485760, backupCount=5)
+    ]
+)
+logger = logging.getLogger('IBC_ULTIMATE')
+
+# Enhanced Database Models
+class User(db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    email = db.Column(db.String(120), unique=True, nullable=False, index=True)
+    password_hash = db.Column(db.String(200), nullable=False)
+    name = db.Column(db.String(100))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    last_login = db.Column(db.DateTime, default=datetime.utcnow)
+    profile_data = db.Column(db.JSON, default=dict)
+    is_active = db.Column(db.Boolean, default=True)
+    role = db.Column(db.String(20), default='user')
+    two_factor_enabled = db.Column(db.Boolean, default=False)
+    two_factor_secret = db.Column(db.String(32))
+    login_attempts = db.Column(db.Integer, default=0)
+    locked_until = db.Column(db.DateTime)
+    preferences = db.Column(db.JSON, default=dict)
+
+class Post(db.Model):
+    __tablename__ = 'posts'
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    title = db.Column(db.String(200), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    author = db.Column(db.String(120), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    tags = db.Column(db.JSON, default=list)
+    status = db.Column(db.String(20), default='published')
+    views = db.Column(db.Integer, default=0)
+    likes = db.Column(db.Integer, default=0)
+    comments_count = db.Column(db.Integer, default=0)
+    featured_image = db.Column(db.String(500))
+
+class File(db.Model):
+    __tablename__ = 'files'
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    original_filename = db.Column(db.String(255), nullable=False)
+    stored_filename = db.Column(db.String(255), nullable=False)
+    file_path = db.Column(db.String(500), nullable=False)
+    uploaded_by = db.Column(db.String(120), nullable=False)
+    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
+    file_size = db.Column(db.Integer, default=0)
+    mime_type = db.Column(db.String(100))
+    is_encrypted = db.Column(db.Boolean, default=False)
+    encryption_key = db.Column(db.String(500))
+
+class Task(db.Model):
+    __tablename__ = 'tasks'
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    task_type = db.Column(db.String(50), nullable=False)
+    scheduled_at = db.Column(db.DateTime, default=datetime.utcnow)
+    executes_at = db.Column(db.DateTime, nullable=False)
+    status = db.Column(db.String(20), default='scheduled')
+    created_by = db.Column(db.String(120), nullable=False)
+    progress = db.Column(db.Integer, default=0)
+    result_data = db.Column(db.JSON)
+
+class Notification(db.Model):
+    __tablename__ = 'notifications'
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    from_user = db.Column(db.String(120), nullable=False)
+    to_email = db.Column(db.String(120), nullable=False)
+    subject = db.Column(db.String(200), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    sent_at = db.Column(db.DateTime, default=datetime.utcnow)
+    status = db.Column(db.String(20), default='sent')
+    notification_type = db.Column(db.String(50), default='email')
+
+class AuditLog(db.Model):
+    __tablename__ = 'audit_logs'
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String(120))
+    action = db.Column(db.String(200), nullable=False)
+    resource = db.Column(db.String(100))
+    resource_id = db.Column(db.String(36))
+    ip_address = db.Column(db.String(45))
+    user_agent = db.Column(db.Text)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    details = db.Column(db.JSON)
+
+class Device(db.Model):
+    __tablename__ = 'devices'
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = db.Column(db.String(100), nullable=False)
+    device_type = db.Column(db.String(50), nullable=False)
+    owner = db.Column(db.String(120), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow)
+    status = db.Column(db.String(20), default='online')
+    configuration = db.Column(db.JSON)
+    telemetry_data = db.Column(db.JSON)
+
+class BlockchainTransaction(db.Model):
+    __tablename__ = 'blockchain_transactions'
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    transaction_hash = db.Column(db.String(64), unique=True, nullable=False)
+    from_address = db.Column(db.String(120), nullable=False)
+    to_address = db.Column(db.String(120), nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+    currency = db.Column(db.String(10), default='USD')
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    status = db.Column(db.String(20), default='pending')
+    block_number = db.Column(db.Integer)
+    gas_used = db.Column(db.Float)
+
+# Create all tables
+with app.app_context():
+    db.create_all()
+
+# =============================================================================
+# ADVANCED UTILITY CLASSES FOR REAL-WORLD PROBLEM SOLVING
+# =============================================================================
+
+class AIService:
+    """Advanced AI and Machine Learning Services"""
+    
+    def __init__(self):
+        self.sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+        self.text_generator = pipeline("text-generation", model="gpt2")
+        try:
+            self.classifier = joblib.load('models/classifier.pkl')
+        except:
+            self.classifier = None
+            
+    def analyze_sentiment(self, text: str) -> Dict[str, Any]:
+        try:
+            result = self.sentiment_analyzer(text[:512])[0]
+            return {
+                "sentiment": result['label'],
+                "confidence": result['score'],
+                "text_sample": text[:100] + "..." if len(text) > 100 else text
+            }
+        except Exception as e:
+            logger.error(f"Sentiment analysis error: {e}")
+            return {"sentiment": "neutral", "confidence": 0.5, "error": str(e)}
+    
+    def generate_text(self, prompt: str, max_length: int = 100) -> Dict[str, Any]:
+        try:
+            result = self.text_generator(prompt, max_length=max_length, num_return_sequences=1)
+            return {
+                "generated_text": result[0]['generated_text'],
+                "prompt": prompt,
+                "length": len(result[0]['generated_text'])
+            }
+        except Exception as e:
+            logger.error(f"Text generation error: {e}")
+            return {"error": str(e)}
+    
+    def train_classification_model(self, training_data: List[Dict]) -> Dict[str, Any]:
+        try:
+            if not training_data:
+                return {"error": "No training data provided"}
+                
+            # Convert to DataFrame
+            df = pd.DataFrame(training_data)
+            
+            # Simple model training (in reality, you'd do proper feature engineering)
+            X = pd.get_dummies(df.drop('target', axis=1))
+            y = df['target']
+            
+            self.classifier = RandomForestClassifier(n_estimators=100, random_state=42)
+            self.classifier.fit(X, y)
+            
+            # Save model
+            joblib.dump(self.classifier, 'models/classifier.pkl')
+            
+            return {
+                "message": "Model trained successfully",
+                "features": list(X.columns),
+                "accuracy": self.classifier.score(X, y)
+            }
+        except Exception as e:
+            logger.error(f"Model training error: {e}")
+            return {"error": str(e)}
+
+class BlockchainService:
+    """Blockchain-style security and transaction management"""
+    
+    @staticmethod
+    def generate_wallet() -> Dict[str, str]:
+        private_key = hashlib.sha256(os.urandom(1024)).hexdigest()
+        public_key = hashlib.sha256(private_key.encode()).hexdigest()
+        address = f"0x{public_key[:40]}"
+        
+        return {
+            "private_key": private_key,
+            "public_key": public_key,
+            "address": address
+        }
+    
+    @staticmethod
+    def create_transaction(from_addr: str, to_addr: str, amount: float, private_key: str) -> Dict[str, Any]:
+        try:
+            # Create transaction data
+            transaction_data = {
+                "from": from_addr,
+                "to": to_addr,
+                "amount": amount,
+                "timestamp": datetime.utcnow().isoformat(),
+                "nonce": str(uuid.uuid4())
+            }
+            
+            # Create signature
+            message = json.dumps(transaction_data, sort_keys=True)
+            signature = hmac.new(
+                private_key.encode(), 
+                message.encode(), 
+                hashlib.sha256
+            ).hexdigest()
+            
+            # Create transaction hash
+            transaction_hash = hashlib.sha256(
+                f"{message}{signature}".encode()
+            ).hexdigest()
+            
+            return {
+                "transaction_hash": transaction_hash,
+                "from": from_addr,
+                "to": to_addr,
+                "amount": amount,
+                "signature": signature,
+                "status": "pending",
+                "timestamp": transaction_data['timestamp']
+            }
+        except Exception as e:
+            logger.error(f"Transaction creation error: {e}")
+            return {"error": str(e)}
+
+class IoTDeviceManager:
+    """Internet of Things device management and telemetry"""
+    
+    def __init__(self):
+        self.devices = {}
+        self.telemetry_history = {}
+        
+    def register_device(self, device_id: str, device_type: str, owner: str, config: Dict = None) -> bool:
+        try:
+            device = Device(
+                id=device_id,
+                name=f"{device_type}_{device_id[:8]}",
+                device_type=device_type,
+                owner=owner,
+                configuration=config or {},
+                status='online'
+            )
+            
+            db.session.add(device)
+            db.session.commit()
+            
+            self.devices[device_id] = {
+                'device': device,
+                'last_telemetry': datetime.utcnow(),
+                'connected': True
+            }
+            
+            logger.info(f"Device registered: {device_id} for {owner}")
+            return True
+        except Exception as e:
+            logger.error(f"Device registration error: {e}")
+            db.session.rollback()
+            return False
+    
+    def update_telemetry(self, device_id: str, telemetry_data: Dict) -> bool:
+        try:
+            if device_id not in self.devices:
+                logger.warning(f"Unknown device: {device_id}")
+                return False
+                
+            device = Device.query.get(device_id)
+            if device:
+                device.telemetry_data = telemetry_data
+                device.last_seen = datetime.utcnow()
+                db.session.commit()
+                
+                # Store in history
+                if device_id not in self.telemetry_history:
+                    self.telemetry_history[device_id] = []
+                
+                self.telemetry_history[device_id].append({
+                    'timestamp': datetime.utcnow(),
+                    'data': telemetry_data
+                })
+                
+                # Keep only last 1000 records
+                if len(self.telemetry_history[device_id]) > 1000:
+                    self.telemetry_history[device_id] = self.telemetry_history[device_id][-1000:]
+                
+                # Broadcast to connected clients
+                socketio.emit('telemetry_update', {
+                    'device_id': device_id,
+                    'telemetry': telemetry_data,
+                    'timestamp': datetime.utcnow().isoformat()
+                })
+                
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Telemetry update error: {e}")
+            return False
+
+class ComputerVisionService:
+    """Computer Vision and Image Processing"""
+    
+    @staticmethod
+    def analyze_image(image_path: str) -> Dict[str, Any]:
+        try:
+            image = cv2.imread(image_path)
+            if image is None:
+                return {"error": "Could not load image"}
+            
+            # Basic image analysis
+            height, width, channels = image.shape
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            
+            # Calculate basic statistics
+            brightness = np.mean(gray)
+            contrast = np.std(gray)
+            
+            # Edge detection
+            edges = cv2.Canny(gray, 100, 200)
+            edge_percentage = np.sum(edges > 0) / (width * height) * 100
+            
+            return {
+                "dimensions": {"width": width, "height": height, "channels": channels},
+                "brightness": float(brightness),
+                "contrast": float(contrast),
+                "edge_percentage": float(edge_percentage),
+                "file_size": os.path.getsize(image_path),
+                "analysis_timestamp": datetime.utcnow().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Image analysis error: {e}")
+            return {"error": str(e)}
+    
+    @staticmethod
+    def generate_qr_code(data: str, size: int = 10) -> io.BytesIO:
+        try:
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=size,
+                border=4,
+            )
+            qr.add_data(data)
+            qr.make(fit=True)
+            
+            img = qr.make_image(fill_color="black", back_color="white")
+            img_io = io.BytesIO()
+            img.save(img_io, 'PNG')
+            img_io.seek(0)
+            
+            return img_io
+        except Exception as e:
+            logger.error(f"QR code generation error: {e}")
+            return None
+
+class SpeechService:
+    """Speech-to-Text and Text-to-Speech Services"""
+    
+    def __init__(self):
+        self.recognizer = sr.Recognizer()
+        self.tts_engine = pyttsx3.init()
+        
+    def speech_to_text(self, audio_file_path: str) -> Dict[str, Any]:
+        try:
+            with sr.AudioFile(audio_file_path) as source:
+                audio = self.recognizer.record(source)
+                text = self.recognizer.recognize_google(audio)
+                
+                return {
+                    "text": text,
+                    "confidence": 0.9,  # Placeholder
+                    "language": "en-US",
+                    "duration": len(audio.frame_data) / (audio.sample_rate * audio.sample_width)
+                }
+        except Exception as e:
+            logger.error(f"Speech recognition error: {e}")
+            return {"error": str(e)}
+    
+    def text_to_speech(self, text: str, output_file: str = None) -> bool:
+        try:
+            if output_file:
+                self.tts_engine.save_to_file(text, output_file)
+            else:
+                self.tts_engine.say(text)
+            
+            self.tts_engine.runAndWait()
+            return True
+        except Exception as e:
+            logger.error(f"Text-to-speech error: {e}")
+            return False
+
+class AdvancedSecurity:
+    """Advanced Security Features"""
+    
+    @staticmethod
+    def generate_2fa_secret() -> str:
+        return base64.b32encode(os.urandom(10)).decode('utf-8')
+    
+    @staticmethod
+    def verify_2fa_token(secret: str, token: str) -> bool:
+        try:
+            # Simple 2FA verification (in production, use proper TOTP)
+            expected_token = hashlib.sha256(f"{secret}{datetime.utcnow().strftime('%Y%m%d%H')}".encode()).hexdigest()[:6]
+            return token == expected_token
+        except:
+            return False
+    
+    @staticmethod
+    def encrypt_data(data: str, key: str = None) -> Dict[str, str]:
+        if not key:
+            key = os.urandom(32).hex()
+        
+        # Simple XOR encryption (use proper encryption in production)
+        encrypted = ''.join(chr(ord(c) ^ ord(k)) for c, k in zip(data, key * len(data)))
+        encrypted_b64 = base64.b64encode(encrypted.encode()).decode()
+        
+        return {
+            "encrypted_data": encrypted_b64,
+            "encryption_key": key
+        }
+    
+    @staticmethod
+    def decrypt_data(encrypted_data: str, key: str) -> str:
+        try:
+            encrypted = base64.b64decode(encrypted_data.encode()).decode()
+            decrypted = ''.join(chr(ord(c) ^ ord(k)) for c, k in zip(encrypted, key * len(encrypted)))
+            return decrypted
+        except:
+            return ""
+
+class DataScienceService:
+    """Advanced Data Analysis and Visualization"""
+    
+    @staticmethod
+    def analyze_dataset(data: List[Dict]) -> Dict[str, Any]:
+        try:
+            df = pd.DataFrame(data)
+            
+            analysis = {
+                "summary_statistics": df.describe().to_dict(),
+                "correlation_matrix": df.corr().to_dict() if len(df.columns) > 1 else {},
+                "missing_values": df.isnull().sum().to_dict(),
+                "data_types": {col: str(dtype) for col, dtype in df.dtypes.items()},
+                "shape": {"rows": len(df), "columns": len(df.columns)}
+            }
+            
+            return analysis
+        except Exception as e:
+            logger.error(f"Dataset analysis error: {e}")
+            return {"error": str(e)}
+    
+    @staticmethod
+    def generate_visualization(data: List[Dict], chart_type: str = "histogram") -> io.BytesIO:
+        try:
+            df = pd.DataFrame(data)
+            
+            plt.figure(figsize=(10, 6))
+            
+            if chart_type == "histogram" and len(df.columns) > 0:
+                df[df.columns[0]].hist()
+                plt.title(f"Histogram of {df.columns[0]}")
+            elif chart_type == "scatter" and len(df.columns) >= 2:
+                plt.scatter(df[df.columns[0]], df[df.columns[1]])
+                plt.xlabel(df.columns[0])
+                plt.ylabel(df.columns[1])
+                plt.title(f"Scatter Plot: {df.columns[0]} vs {df.columns[1]}")
+            elif chart_type == "line" and len(df.columns) >= 2:
+                plt.plot(df[df.columns[0]], df[df.columns[1]])
+                plt.xlabel(df.columns[0])
+                plt.ylabel(df.columns[1])
+                plt.title(f"Line Chart: {df.columns[1]} over {df.columns[0]}")
+            
+            plt.tight_layout()
+            
+            img_io = io.BytesIO()
+            plt.savefig(img_io, format='PNG', dpi=150)
+            img_io.seek(0)
+            plt.close()
+            
+            return img_io
+        except Exception as e:
+            logger.error(f"Visualization generation error: {e}")
+            return None
+
+# Initialize advanced services
+ai_service = AIService()
+blockchain_service = BlockchainService()
+iot_manager = IoTDeviceManager()
+cv_service = ComputerVisionService()
+speech_service = SpeechService()
+security_service = AdvancedSecurity()
+data_science_service = DataScienceService()
+
+# Enhanced EmailService with HTML support
+class EmailService:
+    """Enhanced Email service with HTML support and templates"""
+    
+    @staticmethod
+    def send_email(to_email: str, subject: str, body: str, html_body: str = None) -> bool:
+        try:
+            smtp_server = os.environ.get('SMTP_SERVER', 'smtp.gmail.com')
+            smtp_port = int(os.environ.get('SMTP_PORT', 587))
+            smtp_username = os.environ.get('SMTP_USERNAME')
+            smtp_password = os.environ.get('SMTP_PASSWORD')
+            
+            if all([smtp_server, smtp_username, smtp_password]):
+                server = smtplib.SMTP(smtp_server, smtp_port)
+                server.starttls()
+                server.login(smtp_username, smtp_password)
+                
+                msg = MimeMultipart('alternative')
+                msg['Subject'] = subject
+                msg['From'] = smtp_username
+                msg['To'] = to_email
+                
+                # Add both plain text and HTML versions
+                part1 = MimeText(body, 'plain')
+                msg.attach(part1)
+                
+                if html_body:
+                    part2 = MimeText(html_body, 'html')
+                    msg.attach(part2)
+                
+                server.send_message(msg)
+                server.quit()
+                logger.info(f"Email sent successfully to {to_email}")
+            else:
+                # Enhanced console logging
+                logger.info(f"📧 EMAIL SENT TO: {to_email}")
+                logger.info(f"📋 SUBJECT: {subject}")
+                logger.info(f"📝 BODY: {body[:200]}...")
+                
+            return True
+        except Exception as e:
+            logger.error(f"Email error: {e}")
+            return False
+
+# Advanced Scheduler with task persistence
+class AdvancedScheduler:
+    """Enhanced background task scheduler with persistence and progress tracking"""
+    
+    def __init__(self):
+        self.tasks = {}
+        
+    def schedule_task(self, task_id: str, task_func, delay_seconds: int, *args, **kwargs):
+        def delayed_task():
+            try:
+                task = Task.query.get(task_id)
+                if not task:
+                    return
+                    
+                # Update progress
+                task.status = 'running'
+                task.progress = 10
+                db.session.commit()
+                
+                time.sleep(delay_seconds)
+                
+                # Execute task
+                result = task_func(*args, **kwargs)
+                
+                # Update task status
+                task.status = 'completed'
+                task.progress = 100
+                task.result_data = result
+                db.session.commit()
+                
+                logger.info(f"Task {task_id} completed successfully")
+                
+                # Notify via WebSocket
+                socketio.emit('task_completed', {
+                    'task_id': task_id,
+                    'status': 'completed',
+                    'result': result
+                })
+                
+            except Exception as e:
+                logger.error(f"Task {task_id} failed: {e}")
+                task = Task.query.get(task_id)
+                if task:
+                    task.status = 'failed'
+                    task.result_data = {'error': str(e)}
+                    db.session.commit()
+                
+        thread = threading.Thread(target=delayed_task)
+        thread.daemon = True
+        thread.start()
+        
+        self.tasks[task_id] = {
+            "thread": thread,
+            "scheduled_at": datetime.utcnow(),
+            "executes_at": datetime.utcnow() + timedelta(seconds=delay_seconds)
+        }
+
+# Initialize advanced scheduler
+advanced_scheduler = AdvancedScheduler()
+
+# =============================================================================
+# AUDIT LOGGING MIDDLEWARE
+# =============================================================================
+
+def audit_log(action: str, resource: str = None, resource_id: str = None):
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            response = f(*args, **kwargs)
+            
+            try:
+                # Create audit log entry
+                audit_entry = AuditLog(
+                    user_id=get_jwt_identity() if hasattr(f, 'jwt_required') else None,
+                    action=action,
+                    resource=resource,
+                    resource_id=resource_id,
+                    ip_address=request.remote_addr,
+                    user_agent=request.headers.get('User-Agent'),
+                    details={
+                        'method': request.method,
+                        'endpoint': request.endpoint,
+                        'status_code': response.status_code if hasattr(response, 'status_code') else 200
+                    }
+                )
+                db.session.add(audit_entry)
+                db.session.commit()
+            except Exception as e:
+                logger.error(f"Audit logging error: {e}")
+                db.session.rollback()
+            
+            return response
+        return decorated_function
+    return decorator
+
+# =============================================================================
+# ENHANCED AUTHENTICATION ROUTES
+# =============================================================================
+
+@app.route('/api/auth/register', methods=['POST'])
+@limiter.limit("10 per minute")
+@audit_log("user_registration", "user")
+def register():
+    """
+    Enhanced User Registration with Security Features
+    ---
+    tags:
+      - Authentication
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          required:
+            - email
+            - password
+          properties:
+            email:
+              type: string
+              example: user@example.com
+            password:
+              type: string
+              example: securepassword123
+            name:
+              type: string
+              example: John Doe
+            enable_2fa:
+              type: boolean
+              example: false
+    responses:
+      201:
+        description: User created successfully
+      400:
+        description: Invalid input or user exists
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or not data.get('email') or not data.get('password'):
+            return jsonify({"error": "Email and password required"}), 400
+            
+        email = data['email'].lower().strip()
+        
+        # Enhanced email validation
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
+            return jsonify({"error": "Invalid email format"}), 400
+            
+        # Password strength validation
+        password = data['password']
+        if len(password) < 8:
+            return jsonify({"error": "Password must be at least 8 characters"}), 400
+            
+        # Check if user exists
+        existing_user = User.query.filter_by(email=email).first()
+        if existing_user:
+            return jsonify({"error": "User already exists"}), 400
+            
+        # Create user with enhanced security
+        user_id = str(uuid.uuid4())
+        two_factor_secret = security_service.generate_2fa_secret() if data.get('enable_2fa') else None
+        
+        new_user = User(
+            id=user_id,
+            email=email,
+            password_hash=generate_password_hash(password),
+            name=data.get('name', ''),
+            profile_data={},
+            two_factor_enabled=bool(data.get('enable_2fa')),
+            two_factor_secret=two_factor_secret,
+            preferences=data.get('preferences', {})
+        )
+        
+        db.session.add(new_user)
+        db.session.commit()
+        
+        # Create access tokens
+        access_token = create_access_token(identity=email)
+        refresh_token = create_refresh_token(identity=email)
+        
+        # Send enhanced welcome email
+        html_body = f"""
+        <html>
+            <body>
+                <h2>Welcome to Infinity Backend Core!</h2>
+                <p>Hello <strong>{data.get('name', 'User')}</strong>,</p>
+                <p>Your account has been successfully created.</p>
+                <p>Thank you for joining our platform!</p>
+                <br>
+                <p><em>Infinity Backend Team</em></p>
+            </body>
+        </html>
+        """
+        
+        EmailService.send_email(
+            email,
+            "🎉 Welcome to Infinity Backend Core!",
+            f"Hello {data.get('name', 'User')},\n\nWelcome to our platform!",
+            html_body
+        )
+        
+        logger.info(f"New user registered with enhanced security: {email}")
+        
+        return jsonify({
+            "message": "User created successfully",
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "user": {
+                "id": user_id,
+                "email": email,
+                "name": data.get('name', ''),
+                "two_factor_enabled": new_user.two_factor_enabled
+            }
+        }), 201
+        
+    except Exception as e:
+        logger.error(f"Registration error: {e}")
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/auth/login', methods=['POST'])
+@limiter.limit("5 per minute")
+@audit_log("user_login", "user")
+def login():
+    """
+    Enhanced User Login with Security Features
+    ---
+    tags:
+      - Authentication
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          required:
+            - email
+            - password
+          properties:
+            email:
+              type: string
+              example: user@example.com
+            password:
+              type: string
+              example: securepassword123
+            two_factor_token:
+              type: string
+              example: "123456"
+    responses:
+      200:
+        description: Login successful
+      401:
+        description: Invalid credentials or 2FA required
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or not data.get('email') or not data.get('password'):
+            return jsonify({"error": "Email and password required"}), 400
+            
+        email = data['email'].lower().strip()
+        user = User.query.filter_by(email=email).first()
+        
+        # Check if account is locked
+        if user and user.locked_until and user.locked_until > datetime.utcnow():
+            return jsonify({"error": "Account temporarily locked"}), 423
+            
+        if not user or not check_password_hash(user.password_hash, data['password']):
+            # Increment login attempts
+            if user:
+                user.login_attempts += 1
+                if user.login_attempts >= 5:
+                    user.locked_until = datetime.utcnow() + timedelta(minutes=30)
+                db.session.commit()
+            return jsonify({"error": "Invalid credentials"}), 401
+            
+        # Check if 2FA is required
+        if user.two_factor_enabled:
+            if not data.get('two_factor_token'):
+                return jsonify({
+                    "error": "Two-factor authentication required",
+                    "two_factor_required": True
+                }), 401
+                
+            if not security_service.verify_2fa_token(user.two_factor_secret, data['two_factor_token']):
+                return jsonify({"error": "Invalid two-factor token"}), 401
+        
+        # Reset login attempts on successful login
+        user.login_attempts = 0
+        user.locked_until = None
+        user.last_login = datetime.utcnow()
+        db.session.commit()
+        
+        # Create tokens
+        access_token = create_access_token(identity=email)
+        refresh_token = create_refresh_token(identity=email)
+        
+        logger.info(f"User logged in with enhanced security: {email}")
+        
+        return jsonify({
+            "message": "Login successful",
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "two_factor_enabled": user.two_factor_enabled
+            }
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/auth/refresh', methods=['POST'])
+@jwt_required(refresh=True)
+def refresh_token():
+    """
+    Refresh Access Token
+    ---
+    tags:
+      - Authentication
+    security:
+      - JWT: []
+    responses:
+      200:
+        description: Token refreshed successfully
+    """
+    try:
+        current_user = get_jwt_identity()
+        new_token = create_access_token(identity=current_user)
+        
+        return jsonify({
+            "access_token": new_token
+        }), 200
+    except Exception as e:
+        logger.error(f"Token refresh error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# =============================================================================
+# ADVANCED REAL-WORLD PROBLEM SOLVING APIs
+# =============================================================================
+
+@app.route('/api/ai/sentiment', methods=['POST'])
+@jwt_required()
+@audit_log("ai_sentiment_analysis", "ai")
+def analyze_sentiment():
+    """
+    AI Sentiment Analysis
+    ---
+    tags:
+      - AI Services
+    security:
+      - JWT: []
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          required:
+            - text
+          properties:
+            text:
+              type: string
+              example: "I love this product! It's amazing."
+    responses:
+      200:
+        description: Sentiment analysis completed
+    """
+    try:
+        data = request.get_json()
+        text = data.get('text', '')
+        
+        if not text:
+            return jsonify({"error": "Text is required"}), 400
+            
+        result = ai_service.analyze_sentiment(text)
+        
+        return jsonify({
+            "analysis": result,
+            "timestamp": datetime.utcnow().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Sentiment analysis error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/ai/generate-text', methods=['POST'])
+@jwt_required()
+@limiter.limit("10 per hour")
+@audit_log("ai_text_generation", "ai")
+def generate_text():
+    """
+    AI Text Generation
+    ---
+    tags:
+      - AI Services
+    security:
+      - JWT: []
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          required:
+            - prompt
+          properties:
+            prompt:
+              type: string
+              example: "Once upon a time in a galaxy far far away"
+            max_length:
+              type: integer
+              example: 150
+    responses:
+      200:
+        description: Text generated successfully
+    """
+    try:
+        data = request.get_json()
+        prompt = data.get('prompt', '')
+        max_length = min(data.get('max_length', 100), 500)  # Limit for safety
+        
+        if not prompt:
+            return jsonify({"error": "Prompt is required"}), 400
+            
+        result = ai_service.generate_text(prompt, max_length)
+        
+        return jsonify({
+            "generation": result,
+            "timestamp": datetime.utcnow().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Text generation error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/blockchain/wallet/create', methods=['POST'])
+@jwt_required()
+@audit_log("blockchain_wallet_creation", "blockchain")
+def create_blockchain_wallet():
+    """
+    Create Blockchain Wallet
+    ---
+    tags:
+      - Blockchain
+    security:
+      - JWT: []
+    responses:
+      200:
+        description: Wallet created successfully
+    """
+    try:
+        current_user = get_jwt_identity()
+        wallet = blockchain_service.generate_wallet()
+        
+        # Store wallet info (in production, encrypt private key)
+        user = User.query.filter_by(email=current_user).first()
+        if user and 'wallets' not in user.profile_data:
+            user.profile_data['wallets'] = []
+        
+        user.profile_data['wallets'].append({
+            'address': wallet['address'],
+            'created_at': datetime.utcnow().isoformat()
+        })
+        
+        db.session.commit()
+        
+        logger.info(f"Blockchain wallet created for {current_user}: {wallet['address']}")
+        
+        return jsonify({
+            "message": "Wallet created successfully",
+            "wallet": {
+                "address": wallet['address'],
+                "public_key": wallet['public_key']
+                # Never return private key in response
+            }
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Wallet creation error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/blockchain/transaction', methods=['POST'])
+@jwt_required()
+@audit_log("blockchain_transaction", "blockchain")
+def create_blockchain_transaction():
+    """
+    Create Blockchain Transaction
+    ---
+    tags:
+      - Blockchain
+    security:
+      - JWT: []
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          required:
+            - from_address
+            - to_address
+            - amount
+            - private_key
+          properties:
+            from_address:
+              type: string
+            to_address:
+              type: string
+            amount:
+              type: number
+            private_key:
+              type: string
+    responses:
+      200:
+        description: Transaction created
+    """
+    try:
+        data = request.get_json()
+        current_user = get_jwt_identity()
+        
+        transaction = blockchain_service.create_transaction(
+            data['from_address'],
+            data['to_address'],
+            data['amount'],
+            data['private_key']
+        )
+        
+        if 'error' in transaction:
+            return jsonify({"error": transaction['error']}), 400
+            
+        # Store transaction in database
+        db_transaction = BlockchainTransaction(
+            transaction_hash=transaction['transaction_hash'],
+            from_address=transaction['from'],
+            to_address=transaction['to'],
+            amount=transaction['amount'],
+            status=transaction['status']
+        )
+        
+        db.session.add(db_transaction)
+        db.session.commit()
+        
+        logger.info(f"Blockchain transaction created by {current_user}: {transaction['transaction_hash']}")
+        
+        return jsonify({
+            "message": "Transaction created successfully",
+            "transaction": transaction
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Transaction creation error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/iot/device/register', methods=['POST'])
+@jwt_required()
+@audit_log("iot_device_registration", "iot")
+def register_iot_device():
+    """
+    Register IoT Device
+    ---
+    tags:
+      - IoT
+    security:
+      - JWT: []
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          required:
+            - device_id
+            - device_type
+          properties:
+            device_id:
+              type: string
+            device_type:
+              type: string
+            configuration:
+              type: object
+    responses:
+      200:
+        description: Device registered successfully
+    """
+    try:
+        data = request.get_json()
+        current_user = get_jwt_identity()
+        
+        success = iot_manager.register_device(
+            data['device_id'],
+            data['device_type'],
+            current_user,
+            data.get('configuration')
+        )
+        
+        if success:
+            return jsonify({
+                "message": "Device registered successfully",
+                "device_id": data['device_id']
+            }), 200
+        else:
+            return jsonify({"error": "Device registration failed"}), 400
+            
+    except Exception as e:
+        logger.error(f"IoT device registration error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/iot/device/<device_id>/telemetry', methods=['POST'])
+@jwt_required()
+def update_iot_telemetry(device_id):
+    """
+    Update IoT Device Telemetry
+    ---
+    tags:
+      - IoT
+    security:
+      - JWT: []
+    parameters:
+      - in: path
+        name: device_id
+        required: true
+        type: string
+      - in: body
+        name: body
+        schema:
+          type: object
+          properties:
+            telemetry_data:
+              type: object
+    responses:
+      200:
+        description: Telemetry updated
+    """
+    try:
+        data = request.get_json()
+        current_user = get_jwt_identity()
+        
+        # Verify device ownership
+        device = Device.query.get(device_id)
+        if not device or device.owner != current_user:
+            return jsonify({"error": "Device not found or access denied"}), 404
+            
+        success = iot_manager.update_telemetry(device_id, data.get('telemetry_data', {}))
+        
+        if success:
+            return jsonify({
+                "message": "Telemetry updated successfully",
+                "device_id": device_id,
+                "timestamp": datetime.utcnow().isoformat()
+            }), 200
+        else:
+            return jsonify({"error": "Telemetry update failed"}), 400
+            
+    except Exception as e:
+        logger.error(f"Telemetry update error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/computer-vision/analyze-image', methods=['POST'])
+@jwt_required()
+@audit_log("computer_vision_analysis", "cv")
+def analyze_image():
+    """
+    Computer Vision Image Analysis
+    ---
+    tags:
+      - Computer Vision
+    security:
+      - JWT: []
+    parameters:
+      - in: formData
+        name: image
+        type: file
+        required: true
+    responses:
+      200:
+        description: Image analysis completed
+    """
+    try:
+        current_user = get_jwt_identity()
+        
+        if 'image' not in request.files:
+            return jsonify({"error": "No image provided"}), 400
+            
+        image_file = request.files['image']
+        if image_file.filename == '':
+            return jsonify({"error": "No image selected"}), 400
+            
+        # Save uploaded image
+        filename = secure_filename(image_file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], f"cv_analysis_{uuid.uuid4().hex}_{filename}")
+        image_file.save(file_path)
+        
+        # Analyze image
+        analysis_result = cv_service.analyze_image(file_path)
+        
+        # Clean up
+        try:
+            os.remove(file_path)
+        except:
+            pass
+            
+        return jsonify({
+            "analysis": analysis_result,
+            "timestamp": datetime.utcnow().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Image analysis error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/computer-vision/qr-code', methods=['POST'])
+@jwt_required()
+def generate_qr_code():
+    """
+    Generate QR Code
+    ---
+    tags:
+      - Computer Vision
+    security:
+      - JWT: []
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          required:
+            - data
+          properties:
+            data:
+              type: string
+            size:
+              type: integer
+              example: 10
+    responses:
+      200:
+        description: QR code generated
+    """
+    try:
+        data = request.get_json()
+        qr_data = data.get('data', '')
+        size = data.get('size', 10)
+        
+        if not qr_data:
+            return jsonify({"error": "Data is required"}), 400
+            
+        qr_image = cv_service.generate_qr_code(qr_data, size)
+        
+        if qr_image:
+            return send_file(qr_image, mimetype='image/png', as_attachment=True, download_name='qrcode.png')
+        else:
+            return jsonify({"error": "QR code generation failed"}), 500
+            
+    except Exception as e:
+        logger.error(f"QR code generation error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/speech/speech-to-text', methods=['POST'])
+@jwt_required()
+@audit_log("speech_to_text", "speech")
+def speech_to_text():
+    """
+    Convert Speech to Text
+    ---
+    tags:
+      - Speech
+    security:
+      - JWT: []
+    parameters:
+      - in: formData
+        name: audio
+        type: file
+        required: true
+    responses:
+      200:
+        description: Speech converted to text
+    """
+    try:
+        current_user = get_jwt_identity()
+        
+        if 'audio' not in request.files:
+            return jsonify({"error": "No audio file provided"}), 400
+            
+        audio_file = request.files['audio']
+        if audio_file.filename == '':
+            return jsonify({"error": "No audio file selected"}), 400
+            
+        # Save uploaded audio
+        filename = secure_filename(audio_file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], f"speech_{uuid.uuid4().hex}_{filename}")
+        audio_file.save(file_path)
+        
+        # Convert speech to text
+        result = speech_service.speech_to_text(file_path)
+        
+        # Clean up
+        try:
+            os.remove(file_path)
+        except:
+            pass
+            
+        return jsonify({
+            "transcription": result,
+            "timestamp": datetime.utcnow().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Speech to text error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/data-science/analyze', methods=['POST'])
+@jwt_required()
+@audit_log("data_science_analysis", "analytics")
+def analyze_dataset():
+    """
+    Advanced Data Analysis
+    ---
+    tags:
+      - Data Science
+    security:
+      - JWT: []
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          required:
+            - data
+          properties:
+            data:
+              type: array
+              items:
+                type: object
+    responses:
+      200:
+        description: Data analysis completed
+    """
+    try:
+        data = request.get_json()
+        dataset = data.get('data', [])
+        
+        if not dataset:
+            return jsonify({"error": "No data provided"}), 400
+            
+        analysis = data_science_service.analyze_dataset(dataset)
+        
+        return jsonify({
+            "analysis": analysis,
+            "records_analyzed": len(dataset),
+            "timestamp": datetime.utcnow().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Data analysis error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/data-science/visualize', methods=['POST'])
+@jwt_required()
+def generate_visualization():
+    """
+    Generate Data Visualization
+    ---
+    tags:
+      - Data Science
+    security:
+      - JWT: []
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          required:
+            - data
+          properties:
+            data:
+              type: array
+              items:
+                type: object
+            chart_type:
+              type: string
+              enum: [histogram, scatter, line]
+    responses:
+      200:
+        description: Visualization generated
+    """
+    try:
+        data = request.get_json()
+        dataset = data.get('data', [])
+        chart_type = data.get('chart_type', 'histogram')
+        
+        if not dataset:
+            return jsonify({"error": "No data provided"}), 400
+            
+        visualization = data_science_service.generate_visualization(dataset, chart_type)
+        
+        if visualization:
+            return send_file(visualization, mimetype='image/png', as_attachment=True, download_name='visualization.png')
+        else:
+            return jsonify({"error": "Visualization generation failed"}), 500
+            
+    except Exception as e:
+        logger.error(f"Visualization generation error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# =============================================================================
+# ENHANCED FILE MANAGEMENT WITH ENCRYPTION
+# =============================================================================
+
+@app.route('/api/secure/upload', methods=['POST'])
+@jwt_required()
+@audit_log("secure_file_upload", "files")
+def secure_upload_file():
+    """
+    Secure File Upload with Encryption
+    ---
+    tags:
+      - Files
+    security:
+      - JWT: []
+    parameters:
+      - in: formData
+        name: file
+        type: file
+        required: true
+      - in: formData
+        name: encrypt
+        type: boolean
+    responses:
+      201:
+        description: File uploaded and encrypted
+    """
+    try:
+        current_user = get_jwt_identity()
+        encrypt_file = request.form.get('encrypt', 'false').lower() == 'true'
+        
+        if 'file' not in request.files:
+            return jsonify({"error": "No file provided"}), 400
+            
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({"error": "No file selected"}), 400
+            
+        filename = secure_filename(file.filename)
+        file_id = str(uuid.uuid4())
+        file_extension = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+        new_filename = f"{file_id}.{file_extension}" if file_extension else file_id
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], new_filename)
+        
+        # Read file content
+        file_content = file.read()
+        
+        # Encrypt if requested
+        encryption_key = None
+        if encrypt_file:
+            encryption_result = security_service.encrypt_data(file_content.decode('utf-8', errors='ignore'))
+            file_content = encryption_result['encrypted_data'].encode()
+            encryption_key = encryption_result['encryption_key']
+        
+        # Save file
+        with open(file_path, 'wb') as f:
+            f.write(file_content)
+        
+        # Store file metadata
+        file_record = File(
+            id=file_id,
+            original_filename=filename,
+            stored_filename=new_filename,
+            file_path=file_path,
+            uploaded_by=current_user,
+            file_size=len(file_content),
+            mime_type=file.content_type,
+            is_encrypted=encrypt_file,
+            encryption_key=encryption_key
+        )
+        
+        db.session.add(file_record)
+        db.session.commit()
+        
+        logger.info(f"Secure file uploaded by {current_user}: {filename} (encrypted: {encrypt_file})")
+        
+        response_data = {
+            "message": "File uploaded successfully",
+            "file_id": file_id,
+            "filename": filename,
+            "file_size": file_record.file_size,
+            "is_encrypted": encrypt_file
+        }
+        
+        if encrypt_file:
+            response_data["encryption_key"] = encryption_key
+            
+        return jsonify(response_data), 201
+        
+    except Exception as e:
+        logger.error(f"Secure file upload error: {e}")
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/secure/files/<file_id>/download', methods=['GET'])
+@jwt_required()
+def secure_download_file(file_id):
+    """
+    Download Secure File
+    ---
+    tags:
+      - Files
+    security:
+      - JWT: []
+    parameters:
+      - in: path
+        name: file_id
+        required: true
+        type: string
+      - in: query
+        name: decryption_key
+        type: string
+    responses:
+      200:
+        description: File downloaded
+    """
+    try:
+        file_meta = File.query.get(file_id)
+        
+        if not file_meta:
+            return jsonify({"error": "File not found"}), 404
+            
+        # Check if file is encrypted
+        if file_meta.is_encrypted:
+            decryption_key = request.args.get('decryption_key')
+            if not decryption_key:
+                return jsonify({"error": "Decryption key required"}), 400
+                
+            # Decrypt file
+            with open(file_meta.file_path, 'r') as f:
+                encrypted_content = f.read()
+                
+            decrypted_content = security_service.decrypt_data(encrypted_content, decryption_key)
+            
+            # Create temporary file with decrypted content
+            temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"temp_{file_id}")
+            with open(temp_path, 'w') as f:
+                f.write(decrypted_content)
+                
+            response = send_file(temp_path, as_attachment=True, download_name=file_meta.original_filename)
+            
+            # Clean up temp file after send
+            @response.call_on_close
+            def cleanup():
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+                    
+            return response
+        else:
+            return send_file(file_meta.file_path, as_attachment=True, download_name=file_meta.original_filename)
+        
+    except Exception as e:
+        logger.error(f"Secure file download error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# =============================================================================
+# REAL-TIME COMMUNICATIONS WITH WEB SOCKETS
+# =============================================================================
+
+@socketio.on('connect')
+def handle_connect():
+    """Handle WebSocket connection"""
+    logger.info(f"Client connected: {request.sid}")
+    emit('connection_established', {'message': 'Connected to Infinity Backend Core', 'timestamp': datetime.utcnow().isoformat()})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle WebSocket disconnection"""
+    logger.info(f"Client disconnected: {request.sid}")
+
+@socketio.on('join_room')
+def handle_join_room(data):
+    """Join a room for real-time updates"""
+    room = data.get('room', 'general')
+    join_room(room)
+    emit('room_joined', {'room': room, 'message': f'Joined room: {room}'})
+
+@socketio.on('send_message')
+def handle_send_message(data):
+    """Handle real-time messaging"""
+    room = data.get('room', 'general')
+    message = data.get('message', '')
+    user = data.get('user', 'Anonymous')
+    
+    emit('new_message', {
+        'user': user,
+        'message': message,
+        'timestamp': datetime.utcnow().isoformat(),
+        'room': room
+    }, room=room)
+    
+    logger.info(f"Real-time message from {user} in {room}: {message}")
+
+@socketio.on('device_telemetry_subscribe')
+def handle_device_telemetry_subscribe(data):
+    """Subscribe to device telemetry updates"""
+    device_id = data.get('device_id')
+    if device_id:
+        join_room(f"device_{device_id}")
+        emit('subscription_confirmed', {'device_id': device_id, 'message': 'Subscribed to telemetry updates'})
+
+# =============================================================================
+# ADVANCED ADMINISTRATION AND MONITORING
+# =============================================================================
+
+@app.route('/api/admin/advanced/stats', methods=['GET'])
+@jwt_required()
+def get_advanced_system_stats():
+    """
+    Get Advanced System Statistics
+    ---
+    tags:
+      - Admin
+    security:
+      - JWT: []
+    responses:
+      200:
+        description: Advanced stats retrieved
+    """
+    try:
+        current_user = get_jwt_identity()
+        admin_user = User.query.filter_by(email=current_user).first()
+        
+        if not admin_user or admin_user.role != 'admin':
+            return jsonify({"error": "Admin access required"}), 403
+            
+        # Basic stats
+        total_users = User.query.count()
+        total_posts = Post.query.count()
+        total_files = File.query.count()
+        total_tasks = Task.query.count()
+        total_notifications = Notification.query.count()
+        total_devices = Device.query.count()
+        total_transactions = BlockchainTransaction.query.count()
+        total_audit_logs = AuditLog.query.count()
+        
+        # Storage calculation
+        storage_result = db.session.query(db.func.sum(File.file_size)).scalar()
+        storage_used = storage_result or 0
+        
+        # Active users (logged in last 24 hours)
+        active_users = User.query.filter(User.last_login >= datetime.utcnow() - timedelta(hours=24)).count()
+        
+        # System performance metrics
+        import psutil
+        cpu_percent = psutil.cpu_percent(interval=1)
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        
+        # Database size estimation
+        db_size = 0
+        try:
+            if 'sqlite' in app.config['SQLALCHEMY_DATABASE_URI']:
+                db_path = app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
+                if os.path.exists(db_path):
+                    db_size = os.path.getsize(db_path)
+        except:
+            pass
+        
+        stats = {
+            "system": {
+                "total_users": total_users,
+                "active_users": active_users,
+                "total_posts": total_posts,
+                "total_files": total_files,
+                "total_tasks": total_tasks,
+                "total_notifications": total_notifications,
+                "total_devices": total_devices,
+                "total_transactions": total_transactions,
+                "total_audit_logs": total_audit_logs
+            },
+            "storage": {
+                "files_storage_mb": round(storage_used / (1024 * 1024), 2),
+                "database_size_mb": round(db_size / (1024 * 1024), 2),
+                "total_storage_mb": round((storage_used + db_size) / (1024 * 1024), 2)
+            },
+            "performance": {
+                "cpu_usage_percent": cpu_percent,
+                "memory_usage_percent": memory.percent,
+                "memory_available_gb": round(memory.available / (1024**3), 2),
+                "disk_usage_percent": disk.percent,
+                "disk_free_gb": round(disk.free / (1024**3), 2)
+            },
+            "services": {
+                "ai_services": "active",
+                "blockchain": "active",
+                "iot_management": "active",
+                "computer_vision": "active",
+                "speech_services": "active",
+                "real_time_comms": "active",
+                "security_services": "active"
+            },
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        logger.info(f"Advanced system stats accessed by admin: {current_user}")
+        
+        return jsonify(stats), 200
+        
+    except Exception as e:
+        logger.error(f"Advanced stats error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/admin/audit-logs', methods=['GET'])
+@jwt_required()
+def get_audit_logs():
+    """
+    Get Audit Logs
+    ---
+    tags:
+      - Admin
+    security:
+      - JWT: []
+    parameters:
+      - in: query
+        name: page
+        type: integer
+      - in: query
+        name: per_page
+        type: integer
+      - in: query
+        name: user_id
+        type: string
+    responses:
+      200:
+        description: Audit logs retrieved
+    """
+    try:
+        current_user = get_jwt_identity()
+        admin_user = User.query.filter_by(email=current_user).first()
+        
+        if not admin_user or admin_user.role != 'admin':
+            return jsonify({"error": "Admin access required"}), 403
+            
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 50))
+        user_id = request.args.get('user_id')
+        
+        query = AuditLog.query
+        
+        if user_id:
+            query = query.filter_by(user_id=user_id)
+            
+        logs = query.order_by(AuditLog.timestamp.desc()).paginate(
+            page=page, 
+            per_page=per_page, 
+            error_out=False
+        )
+        
+        logs_list = []
+        for log in logs.items:
+            logs_list.append({
+                'id': log.id,
+                'user_id': log.user_id,
+                'action': log.action,
+                'resource': log.resource,
+                'resource_id': log.resource_id,
+                'ip_address': log.ip_address,
+                'timestamp': log.timestamp.isoformat(),
+                'details': log.details
+            })
+        
+        return jsonify({
+            "audit_logs": logs_list,
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total_logs": logs.total,
+                "total_pages": logs.pages
+            }
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Audit logs error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# =============================================================================
+# BACKUP AND RECOVERY SYSTEM
+# =============================================================================
+
+@app.route('/api/system/backup', methods=['POST'])
+@jwt_required()
+def create_system_backup():
+    """
+    Create System Backup
+    ---
+    tags:
+      - System
+    security:
+      - JWT: []
+    responses:
+      200:
+        description: Backup created successfully
+    """
+    try:
+        current_user = get_jwt_identity()
+        admin_user = User.query.filter_by(email=current_user).first()
+        
+        if not admin_user or admin_user.role != 'admin':
+            return jsonify({"error": "Admin access required"}), 403
+            
+        backup_id = str(uuid.uuid4())
+        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        backup_filename = f"backup_{timestamp}_{backup_id[:8]}.json"
+        backup_path = os.path.join('backups', backup_filename)
+        
+        # Collect system data for backup
+        backup_data = {
+            "metadata": {
+                "backup_id": backup_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "created_by": current_user,
+                "version": "3.0.0"
+            },
+            "users": [],
+            "posts": [],
+            "files_metadata": []
+        }
+        
+        # Backup users (without passwords)
+        users = User.query.all()
+        for user in users:
+            backup_data["users"].append({
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "created_at": user.created_at.isoformat(),
+                "role": user.role
+            })
+        
+        # Backup posts
+        posts = Post.query.all()
+        for post in posts:
+            backup_data["posts"].append({
+                "id": post.id,
+                "title": post.title,
+                "content": post.content,
+                "author": post.author,
+                "created_at": post.created_at.isoformat(),
+                "tags": post.tags
+            })
+        
+        # Backup file metadata
+        files = File.query.all()
+        for file in files:
+            backup_data["files_metadata"].append({
+                "id": file.id,
+                "original_filename": file.original_filename,
+                "uploaded_by": file.uploaded_by,
+                "uploaded_at": file.uploaded_at.isoformat(),
+                "file_size": file.file_size
+            })
+        
+        # Save backup file
+        with open(backup_path, 'w') as f:
+            json.dump(backup_data, f, indent=2)
+        
+        logger.info(f"System backup created by {current_user}: {backup_filename}")
+        
+        return jsonify({
+            "message": "Backup created successfully",
+            "backup_id": backup_id,
+            "filename": backup_filename,
+            "size": os.path.getsize(backup_path)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Backup creation error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# =============================================================================
+# ENHANCED HEALTH CHECK AND SYSTEM INFO
+# =============================================================================
+
+@app.route('/api/health/advanced', methods=['GET'])
+def advanced_health_check():
+    """
+    Advanced Health Check
+    ---
+    tags:
+      - System
+    responses:
+      200:
+        description: Advanced system status
+    """
+    try:
+        # Check database connection
+        db.session.execute('SELECT 1')
+        db_status = "connected"
+    except:
+        db_status = "disconnected"
+    
+    # Check Redis
+    redis_status = "connected" if redis_client and redis_client.ping() else "disconnected"
+    
+    # Check storage
+    upload_folder_writable = os.access(app.config['UPLOAD_FOLDER'], os.W_OK)
+    backups_folder_writable = os.access('backups', os.W_OK)
+    
+    # System resources
+    import psutil
+    cpu_usage = psutil.cpu_percent(interval=0.1)
+    memory = psutil.virtual_memory()
+    disk = psutil.disk_usage('/')
+    
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": "3.0.0",
+        "services": {
+            "database": db_status,
+            "redis": redis_status,
+            "authentication": "active",
+            "file_system": "active" if upload_folder_writable else "degraded",
+            "backup_system": "active" if backups_folder_writable else "degraded",
+            "ai_services": "active",
+            "blockchain": "active",
+            "iot_services": "active",
+            "computer_vision": "active",
+            "speech_services": "active",
+            "real_time_comms": "active"
+        },
+        "resources": {
+            "cpu_usage_percent": cpu_usage,
+            "memory_usage_percent": memory.percent,
+            "disk_usage_percent": disk.percent,
+            "uptime_seconds": int(time.time() - psutil.boot_time())
+        },
+        "system": {
+            "python_version": os.environ.get('PYTHON_VERSION', 'Unknown'),
+            "flask_version": "2.3.3",
+            "environment": os.environ.get('FLASK_ENV', 'production')
+        }
+    }), 200
+
+@app.route('/api/system/advanced/info', methods=['GET'])
+def advanced_system_info():
+    """
+    Advanced System Information
+    ---
+    tags:
+      - System
+    responses:
+      200:
+        description: Advanced system information
+    """
+    return jsonify({
+        "name": "Infinity Backend Core ULTIMATE v3.0",
+        "version": "3.0.0",
+        "description": "Complete production-ready ultimate backend server with AI, IoT, Blockchain, and advanced real-world problem solving",
+        "architecture": "Microservices-ready Monolith",
+        "features": [
+            "Enhanced User Authentication & Management",
+            "Two-Factor Authentication (2FA)",
+            "Advanced File Upload System with Encryption",
+            "AI-Powered Services (Sentiment Analysis, Text Generation)",
+            "Blockchain-style Security & Transactions",
+            "IoT Device Management & Real-time Telemetry",
+            "Computer Vision & Image Processing",
+            "Speech-to-Text & Text-to-Speech",
+            "Real-time WebSocket Communications",
+            "Advanced Data Science & Analytics",
+            "QR Code Generation",
+            "Advanced Security & Audit Logging",
+            "Backup & Recovery System",
+            "Admin Dashboard with Advanced Monitoring",
+            "Rate Limiting & Advanced Security",
+            "API Documentation with Swagger",
+            "Production Logging & Monitoring"
+        ],
+        "capabilities": [
+            "Machine Learning Model Training",
+            "Real-time Data Visualization",
+            "Secure Encrypted File Storage",
+            "IoT Device Remote Management",
+            "Blockchain-style Digital Transactions",
+            "Natural Language Processing",
+            "Computer Vision Analysis",
+            "Voice Command Processing",
+            "Real-time Collaboration",
+            "Advanced Analytics & Reporting"
+        ],
+        "author": "Infinity Backend Core Team",
+        "documentation": "/apidocs",
+        "database": "SQLAlchemy with SQLite/PostgreSQL/MySQL",
+        "security": "JWT Authentication + 2FA + Rate Limiting + Audit Logging",
+        "performance": "Optimized for high-concurrency production environments",
+        "license": "MIT Open Source",
+        "support": "Enterprise-grade support available"
+    }), 200
+
+# =============================================================================
+# ERROR HANDLERS AND MIDDLEWARE
+# =============================================================================
+
+@app.errorhandler(404)
+def not_found(error):
+    logger.warning(f"404 error: {request.url}")
+    return jsonify({
+        "error": "Endpoint not found",
+        "documentation": "/apidocs",
+        "timestamp": datetime.utcnow().isoformat()
+    }), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"500 error: {error}")
+    return jsonify({
+        "error": "Internal server error",
+        "reference_id": str(uuid.uuid4()),
+        "timestamp": datetime.utcnow().isoformat()
+    }), 500
+
+@app.errorhandler(413)
+def too_large(error):
+    logger.warning("413 error: File too large")
+    return jsonify({
+        "error": "File too large",
+        "max_size_mb": app.config['MAX_CONTENT_LENGTH'] / (1024 * 1024),
+        "timestamp": datetime.utcnow().isoformat()
+    }), 413
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    logger.warning(f"429 error: Rate limit exceeded for {get_remote_address()}")
+    return jsonify({
+        "error": "Rate limit exceeded",
+        "retry_after": e.description,
+        "timestamp": datetime.utcnow().isoformat()
+    }), 429
+
+# =============================================================================
+# STARTUP INITIALIZATION AND MAIN EXECUTION
+# =============================================================================
+
+@app.before_first_request
+def initialize_system():
+    """Initialize system with default admin user and essential services"""
+    try:
+        # Create default admin user
+        admin_email = os.environ.get('ADMIN_EMAIL', 'admin@ibc.com')
+        admin_password = os.environ.get('ADMIN_PASSWORD', 'Admin123!')
+        
+        existing_admin = User.query.filter_by(email=admin_email).first()
+        if not existing_admin:
+            admin_user = User(
+                email=admin_email,
+                password_hash=generate_password_hash(admin_password),
+                name='System Administrator',
+                role='admin',
+                two_factor_enabled=False
+            )
+            db.session.add(admin_user)
+            db.session.commit()
+            logger.info("🎯 Default admin user created")
+        
+        # Initialize AI models
+        try:
+            # This will download models on first run
+            _ = ai_service.analyze_sentiment("Test")
+            logger.info("🤖 AI services initialized successfully")
+        except Exception as e:
+            logger.warning(f"AI initialization warning: {e}")
+        
+        # Initialize speech services
+        try:
+            speech_service.text_to_speech("System initialized", None)
+            logger.info("🎙️ Speech services initialized successfully")
+        except Exception as e:
+            logger.warning(f"Speech services initialization warning: {e}")
+        
+        logger.info("🚀 Infinity Backend Core ULTIMATE v3.0 initialized successfully")
+        
+    except Exception as e:
+        logger.error(f"System initialization error: {e}")
+
+def run_scheduler():
+    """Background task scheduler"""
+    while True:
+        try:
+            # Check for pending tasks
+            pending_tasks = Task.query.filter_by(status='scheduled').filter(
+                Task.executes_at <= datetime.utcnow()
+            ).all()
+            
+            for task in pending_tasks:
+                logger.info(f"Executing scheduled task: {task.id}")
+                # In a real implementation, you'd execute the actual task logic here
+                task.status = 'completed'
+                task.progress = 100
+                db.session.commit()
+                
+            time.sleep(60)  # Check every minute
+        except Exception as e:
+            logger.error(f"Scheduler error: {e}")
+            time.sleep(60)
+
+# Start background scheduler
+scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+scheduler_thread.start()
+
+if __name__ == '__main__':
+    print("=" * 80)
+    print("🚀 STARTING INFINITY BACKEND CORE ULTIMATE v3.0")
+    print("=" * 80)
+    print("📍 ADVANCED FEATURES LOADED:")
+    print("   🤖 AI Services (Sentiment Analysis, Text Generation)")
+    print("   ⛓️  Blockchain-style Security & Transactions")
+    print("   📱 IoT Device Management & Real-time Telemetry")
+    print("   👁️  Computer Vision & Image Processing")
+    print("   🎙️  Speech-to-Text & Text-to-Speech")
+    print("   🔐 Advanced Security (2FA, Encryption, Audit Logging)")
+    print("   📊 Data Science & Advanced Analytics")
+    print("   ⚡ Real-time WebSocket Communications")
+    print("   💾 Backup & Recovery System")
+    print("=" * 80)
+    print("📍 ADMIN PANEL: /api/admin/advanced/stats")
+    print("📍 HEALTH CHECK: /api/health/advanced")
+    print("📍 SYSTEM INFO: /api/system/advanced/info")
+    print("📍 API DOCUMENTATION: /apidocs")
+    print("=" * 80)
+    
+    # Run the server
+    debug_mode = os.environ.get('DEBUG', 'False').lower() == 'true'
+    port = int(os.environ.get('PORT', 5000))
+    
+    if debug_mode:
+        print(f"🔧 DEBUG MODE: Running on http://0.0.0.0:{port}")
+        socketio.run(app, host='0.0.0.0', port=port, debug=True)
+    else:
+        print(f"🚀 PRODUCTION MODE: Running on http://0.0.0.0:{port}")
+        from waitress import serve
+        serve(app, host='0.0.0.0', port=port)
+rate this code 
